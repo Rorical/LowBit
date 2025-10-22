@@ -469,7 +469,7 @@ result = solve_with_restarts(
 )
 
 print(f"Best energy: {result.best_energy}")
-print(f"Best state: {result.best_state}")
+print(f"Best state: {result.best_solution}")
 print(f"Restarts used: {result.restarts_completed}")
 ```
 
@@ -497,7 +497,7 @@ from lowbit.optimizer import solve_with_restarts
 result = solve_with_restarts(ising_result)
 
 # 5. Decode solution
-solution = builder.decode(result.best_state)
+solution = builder.decode(result.best_solution)
 ```
 
 This unified approach allows easy switching between problem types while maintaining the same solving workflow.
