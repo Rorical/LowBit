@@ -8,7 +8,7 @@ from fractions import Fraction
 from functools import reduce
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
-from collections.abc import Mapping as MappingABC, Sequence as SequenceABC
+from collections.abc import Mapping as MappingABC
 
 from .compiler import QUBOCompiler, CompilationResult
 
@@ -27,12 +27,13 @@ def _solution_to_map(
     if isinstance(solution, MappingABC):
         return {str(name): float(value) for name, value in solution.items()}
 
-    if isinstance(solution, SequenceABC) and not isinstance(solution, (str, bytes)):
+    # Handle numpy arrays and other array-like objects
+    if hasattr(solution, '__len__') and hasattr(solution, '__getitem__') and not isinstance(solution, (str, bytes)):
         if variable_order is None:
             raise ValueError("variable_order is required when solution is a sequence.")
         if len(solution) != len(variable_order):
             raise ValueError("Solution length does not match variable order.")
-        return {str(variable_order[idx]): float(value) for idx, value in enumerate(solution)}
+        return {str(variable_order[idx]): float(solution[idx]) for idx in range(len(solution))}
 
     raise TypeError("Solution must be a mapping or a sequence of values.")
 
@@ -276,10 +277,20 @@ class CQMBuilder:
         include_slack: bool = False,
     ) -> Union[Dict[str, int], Dict[str, Dict[str, int]]]:
         """Convert solver outputs into the original decision variable domains."""
-        order = list(variable_order) if variable_order is not None else list(self._bqm.variables().keys())
+        # Use QUBO variable order if not provided, to handle slack variables
+        if variable_order is None:
+            # Get the complete variable order from the compiled QUBO
+            qubo = self.compile()
+            order = list(qubo.variables)
+        else:
+            order = list(variable_order)
+
         mapping = _solution_to_map(solution, order if not isinstance(solution, MappingABC) else None)
 
-        variables = self._bqm.decode(solution, variable_order=variable_order, threshold=threshold)
+        # For BQM decode, we need to filter out slack variables and reorder
+        bqm_variables = list(self._bqm.variables().keys())
+        filtered_solution = [mapping[var] for var in bqm_variables]
+        variables = self._bqm.decode(filtered_solution, variable_order=bqm_variables, threshold=threshold)
 
         if not include_slack:
             return variables

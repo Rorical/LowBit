@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping as MappingABC, Sequence as SequenceABC
+from collections.abc import Mapping as MappingABC
 from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple, Union
 
 from .compiler import QUBOCompiler
@@ -16,12 +16,13 @@ def _solution_to_map(
 ) -> Dict[str, float]:
     if isinstance(solution, MappingABC):
         return {str(name): float(value) for name, value in solution.items()}
-    if isinstance(solution, SequenceABC) and not isinstance(solution, (str, bytes)):
+    # Handle numpy arrays and other array-like objects
+    if hasattr(solution, '__len__') and hasattr(solution, '__getitem__') and not isinstance(solution, (str, bytes)):
         if variable_order is None:
             raise ValueError("variable_order is required when solution is a sequence.")
         if len(solution) != len(variable_order):
             raise ValueError("Solution length does not match variable order.")
-        return {str(variable_order[idx]): float(value) for idx, value in enumerate(solution)}
+        return {str(variable_order[idx]): float(solution[idx]) for idx in range(len(solution))}
     raise TypeError("Solution must be a mapping or a sequence of values.")
 
 

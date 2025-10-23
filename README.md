@@ -1,14 +1,14 @@
 # LowBit
 
-LowBit is a Python library for solving optimization problems using Quantum-inspired Ising machines. It provides high-level builders for various problem types that compile to QUBO (Quadratic Unconstrained Binary Optimization) formulations.
+LowBit is a Python library for solving optimization problems using probabilistic Ising machines. It provides high-level builders for various problem types that compile to QUBO (Quadratic Unconstrained Binary Optimization) formulations and a sophisticated multi-restart optimization engine.
 
 ## Core Architecture
 
 All problem builders follow the same pattern:
-1. **Build** - Define variables, objective, and constraints
-2. **Compile** - Convert to QUBO formulation
-3. **Solve** - Use the Ising solver to find solutions
-4. **Decode** - Convert binary solutions back to original problem domain
+1. **Build** - Define variables, objective, and constraints using high-level builders
+2. **Compile** - Convert to QUBO formulation via QUBOCompiler
+3. **Solve** - Use the ProbabilisticIsingMachine with multi-restart optimization
+4. **Decode** - Convert probabilistic solutions back to original problem domain
 
 ## Installation
 
@@ -20,43 +20,47 @@ pip install lowbit
 
 ### QUBOCompiler (`lowbit.compiler`)
 
-The foundation class for building QUBO formulations.
+The foundation class for building QUBO formulations with incremental construction.
 
 #### Class: `QUBOCompiler`
 
 ```python
-from lowbit.compiler import QUBOCompiler
+from lowbit import QUBOCompiler
 
 compiler = QUBOCompiler()
 ```
 
 **Variable Management:**
-- `add_variable(name: Optional[str] = None, *, bias: float = 0.0) -> int` - Register a binary variable
-- `extend_variables(count: int, prefix: str = "x") -> List[int]` - Create multiple variables
-- `variable(ref: Union[int, str]) -> int` - Resolve variable reference to index
+- `add_variable(name: Optional[str] = None, *, bias: float = 0.0) -> int` - Register a binary variable, returns index
+- `extend_variables(count: int, prefix: str = "x") -> List[int]` - Create multiple variables with prefix
+- `variable(ref: Union[int, str]) -> int` - Resolve variable reference (name or index) to index
 
 **Objective Construction:**
-- `add_linear(ref: Union[int, str], weight: float) -> None` - Add linear term
+- `add_linear(ref: Union[int, str], weight: float) -> None` - Add to linear coefficient
 - `set_linear(ref: Union[int, str], weight: float) -> None` - Set linear coefficient
+- `add_linear_terms(terms: Mapping[VariableRef, float]) -> None` - Batch add linear terms
 - `add_quadratic(u: Union[int, str], v: Union[int, str], weight: float) -> None` - Add quadratic term
+- `set_quadratic(u: Union[int, str], v: Union[int, str], weight: float) -> None` - Set quadratic coefficient
+- `add_quadratic_terms(terms: Iterable[Tuple[VariableRef, VariableRef, float]]) -> None` - Batch add quadratic terms
 - `add_constant(value: float) -> None` - Add constant offset
 
 **Constraint Penalties:**
-- `add_penalty_equality(terms, target: float, *, weight: float = 1.0)` - Equality constraint
+- `add_penalty_equality(terms, target: float, *, weight: float = 1.0)` - Equality constraint penalty
 - `add_penalty_exactly_one(variables, *, weight: float = 1.0)` - One-hot constraint
 - `add_penalty_at_most_one(variables, *, weight: float = 1.0)` - At-most-one constraint
-- `add_penalty_sum_equals(variables, target: float, *, weight: float = 1.0)` - Sum constraint
-- `add_penalty_sum_at_most(variables, bound: int, *, weight: float = 1.0)` - Upper bound constraint
-- `add_penalty_sum_at_least(variables, bound: int, *, weight: float = 1.0)` - Lower bound constraint
+- `add_penalty_sum_equals(variables, target: float, *, weight: float = 1.0)` - Sum equality constraint
+- `add_penalty_sum_at_most(variables, bound: int, *, weight: float = 1.0, slack_prefix: str = "slack_le")` - Sum upper bound with slack
+- `add_penalty_sum_at_least(variables, bound: int, *, weight: float = 1.0, slack_prefix: str = "slack_ge")` - Sum lower bound with slack
+- `add_penalty_sum_between(variables, lower: int, upper: int, *, weight: float = 1.0, slack_prefix: str = "slack_range")` - Sum range constraint
 
 **Compilation:**
 - `compile(*, sparse: bool = False) -> CompilationResult` - Generate Ising parameters (J, h, offset)
 
 **Properties:**
-- `variables -> Tuple[str, ...]` - Variable names in order
-- `linear_terms -> Dict[int, float]` - Linear coefficients by index
-- `quadratic_terms -> Dict[Tuple[int, int], float]` - Quadratic coefficients
-- `constant -> float` - Constant offset
+- `variables -> Tuple[str, ...]` - Variable names in insertion order
+- `linear_terms -> Dict[int, float]` - Linear coefficients by variable index
+- `quadratic_terms -> Dict[Tuple[int, int], float]` - Quadratic coefficients by ordered variable pairs
+- `constant -> float` - Constant offset in QUBO objective
 
 ---
 
@@ -69,9 +73,9 @@ Build linear and nonlinear programming problems with continuous variables.
 Converts continuous optimization problems to QUBO via binary encoding.
 
 ```python
-from lowbit.program import LinearProgramBuilder
+from lowbit import LinearProgramBuilder
 
-builder = LinearProgramBuilder(default_constraint_weight=10.0)
+builder = LinearProgramBuilder(default_constraint_weight=50.0)
 ```
 
 **Variable Management:**
@@ -94,6 +98,8 @@ builder = LinearProgramBuilder(default_constraint_weight=10.0)
 
 **Example:**
 ```python
+from lowbit import LinearProgramBuilder, solve_with_restarts
+
 # Create LP builder
 lp = LinearProgramBuilder()
 
@@ -106,12 +112,12 @@ lp.set_maximization(True)
 lp.set_objective_coefficients({"x": 3, "y": 2})
 
 # Constraint: x + 2*y <= 8
-lp.add_linear_constraint({"x": 1, "y": 2}, rhs=8, sense="<=")
+lp.add_linear_constraint({"x": 1, "y": 2}, rhs=8, sense="<=", weight=100.0)
 
 # Compile and solve
 ising_result = lp.to_ising()
-# ... solve with ising machine ...
-solution = lp.decode(solver_output)
+result = solve_with_restarts(ising_result)
+solution = lp.decode(result.best_solution)
 ```
 
 #### Class: `NonLinearProgramBuilder`
@@ -119,9 +125,9 @@ solution = lp.decode(solver_output)
 Extends LinearProgramBuilder with quadratic terms.
 
 ```python
-from lowbit.program import NonLinearProgramBuilder
+from lowbit import NonLinearProgramBuilder
 
-builder = NonLinearProgramBuilder(default_constraint_weight=10.0)
+builder = NonLinearProgramBuilder(default_constraint_weight=50.0)
 ```
 
 **Additional Methods:**
@@ -131,6 +137,8 @@ builder = NonLinearProgramBuilder(default_constraint_weight=10.0)
 
 **Example:**
 ```python
+from lowbit import NonLinearProgramBuilder, solve_with_restarts
+
 # Create NLP builder
 nlp = NonLinearProgramBuilder()
 
@@ -144,10 +152,13 @@ nlp.set_quadratic_objective_coefficient("x", "y", 2.0)
 nlp.set_quadratic_objective_coefficient("y", "y", 1.0)
 
 # Linear constraint: x + y >= 1
-nlp.add_linear_constraint({"x": 1, "y": 1}, rhs=1, sense=">=")
+nlp.add_linear_constraint({"x": 1, "y": 1}, rhs=1, sense=">=", weight=50.0)
 
 # Compile and solve
 ising_result = nlp.to_ising()
+result = solve_with_restarts(ising_result)
+solution = nlp.decode(result.best_solution)
+print(f"x = {solution['x']:.3f}, y = {solution['y']:.3f}")
 ```
 
 ---
@@ -161,7 +172,7 @@ Build various types of quadratic models with different variable types and constr
 Binary Quadratic Model builder for binary and spin variables.
 
 ```python
-from lowbit.models import BQMBuilder
+from lowbit import BQMBuilder
 
 bqm = BQMBuilder()
 ```
@@ -185,6 +196,8 @@ bqm = BQMBuilder()
 
 **Example:**
 ```python
+from lowbit import BQMBuilder, solve_with_restarts
+
 # Create BQM
 bqm = BQMBuilder()
 
@@ -201,6 +214,9 @@ bqm.set_quadratic("x1", "x2", 1.0)
 
 # Compile and solve
 ising_result = bqm.to_ising()
+result = solve_with_restarts(ising_result)
+solution = bqm.decode(result.best_solution)
+print(f"Solution: {solution}")
 ```
 
 #### Class: `CQMBuilder`
@@ -208,7 +224,7 @@ ising_result = bqm.to_ising()
 Constrained Quadratic Model with linear constraints.
 
 ```python
-from lowbit.models import CQMBuilder
+from lowbit import CQMBuilder
 
 cqm = CQMBuilder()
 ```
@@ -221,6 +237,8 @@ cqm = CQMBuilder()
 
 **Example:**
 ```python
+from lowbit import CQMBuilder, solve_with_restarts
+
 # Create CQM
 cqm = CQMBuilder()
 
@@ -231,11 +249,14 @@ cqm.add_variable("z", vartype="BINARY")
 cqm.set_linear("x", 1.0)
 cqm.set_linear("y", 1.0)
 
-# Constraint: x + y + z == 2
-cqm.add_linear_constraint({"x": 1, "y": 1, "z": 1}, rhs=2, sense="==", weight=5.0)
+# Constraint: x + y + z == 2 (strong constraint weight)
+cqm.add_linear_constraint({"x": 1, "y": 1, "z": 1}, rhs=2, sense="==", weight=100.0)
 
-# Compile
+# Compile and solve
 ising_result = cqm.to_ising()
+result = solve_with_restarts(ising_result)
+solution = cqm.decode(result.best_solution)
+print(f"Solution: {solution}")
 ```
 
 #### Class: `DQMBuilder`
@@ -243,9 +264,9 @@ ising_result = cqm.to_ising()
 Discrete Quadratic Model using one-hot encoding for categorical variables.
 
 ```python
-from lowbit.models import DQMBuilder
+from lowbit import DQMBuilder
 
-dqm = DQMBuilder(one_hot_weight=5.0)
+dqm = DQMBuilder(one_hot_weight=50.0)
 ```
 
 **Variable Management:**
@@ -269,6 +290,8 @@ dqm = DQMBuilder(one_hot_weight=5.0)
 
 **Example:**
 ```python
+from lowbit import DQMBuilder, solve_with_restarts
+
 # Create DQM
 dqm = DQMBuilder()
 
@@ -280,12 +303,14 @@ dqm.add_variable("size", ["small", "medium", "large"])
 dqm.set_linear("color", "red", -1.0)
 dqm.set_linear("size", "large", 2.0)
 
-# Interaction: red+large is problematic
-dqm.set_quadratic("color", "red", "size", "large", 5.0)
+# Interaction: red+large is problematic (strong penalty)
+dqm.set_quadratic("color", "red", "size", "large", 20.0)
 
 # Compile and solve
 ising_result = dqm.to_ising()
-decoded = dqm.decode(solution)  # {"color": "red", "size": "medium"}
+result = solve_with_restarts(ising_result)
+decoded = dqm.decode(result.best_solution)
+print(f"Decoded: {decoded}")  # {"color": "red", "size": "medium"}
 ```
 
 ---
@@ -297,9 +322,9 @@ Solve classical graph optimization problems.
 #### Class: `GraphProblemBuilder`
 
 ```python
-from lowbit.graph import GraphProblemBuilder
+from lowbit import GraphProblemBuilder
 
-graph = GraphProblemBuilder(default_penalty_weight=10.0)
+graph = GraphProblemBuilder(default_penalty_weight=50.0)
 ```
 
 **Graph Construction:**
@@ -364,103 +389,187 @@ is_valid = graph.is_valid_coloring(coloring)
 
 ### Boolean Circuits (`lowbit.circuit`)
 
-Build Boolean gate networks and compile to QUBO constraints.
+Translate Boolean gate networks into QUBO constraints with automatic ancilla signal management.
 
 #### Class: `BinaryCircuitCompiler`
 
 ```python
-from lowbit.circuit import BinaryCircuitCompiler
+from lowbit import BinaryCircuitCompiler
 
-circuit = BinaryCircuitCompiler(default_weight=1.0)
+circuit = BinaryCircuitCompiler(default_weight=10.0)
 ```
 
 **Signal Management:**
-- `add_signal(name: str) -> int` - Add circuit signal
-- `fix_signal(name: str, value: int, *, weight: Optional[float] = None)` - Fix signal to 0 or 1
+- `add_signal(name: str) -> int` - Add circuit signal, returns variable index
+- `fix_signal(name: str, value: int, *, weight: Optional[float] = None)` - Force signal to constant value (0 or 1)
 
 **Gate Operations:**
 - `gate(gate_type: str, output: str, inputs: Sequence[str], *, weight: Optional[float] = None)` - Add logic gate
 
 **Supported Gates:**
 - **NOT/NEG/INVERT** - Single input: output = NOT(input)
-- **BUF/IDENTITY** - Single input: output = input
-- **AND** - Multi-input: output = input1 AND input2 AND ...
-- **OR** - Multi-input: output = input1 OR input2 OR ...
-- **NAND** - Multi-input: output = NOT(AND(...))
-- **NOR** - Multi-input: output = NOT(OR(...))
-- **XOR** - Multi-input: output = input1 XOR input2 XOR ...
-- **XNOR/NXOR** - Multi-input: output = NOT(XOR(...))
+- **BUF/IDENTITY** - Single input: output = input (equality constraint)
+- **AND** - Multi-input: output = input1 AND input2 AND ... (with ancilla for >2 inputs)
+- **OR** - Multi-input: output = input1 OR input2 OR ... (with ancilla for >2 inputs)
+- **NAND** - Multi-input: output = NOT(AND(...)) (with ancilla for >2 inputs)
+- **NOR** - Multi-input: output = NOT(OR(...)) (with ancilla for >2 inputs)
+- **XOR** - Multi-input: output = input1 XOR input2 XOR ... (with ancilla for >2 inputs)
+- **XNOR/NXOR** - Multi-input: output = NOT(XOR(...)) (with ancilla for >2 inputs)
 
 **Advanced Operations:**
-- `cascade(gate_type: str, inputs: Sequence[str], outputs: Sequence[str], *, weight: Optional[float] = None)` - Chain binary gates
-- `chain_equals(signals: Sequence[str], *, weight: Optional[float] = None)` - Force signals equal
+- `cascade(gate_type: str, inputs: Sequence[str], outputs: Sequence[str], *, weight: Optional[float] = None)` - Chain binary gate across sequential inputs
+- `chain_equals(signals: Sequence[str], *, weight: Optional[float] = None)` - Enforce equality across signal list
 
 **Compilation:**
-- `compile() -> QUBOCompiler` - Get underlying QUBO compiler
-- `signals -> Mapping[str, int]` - Get signal name to variable index mapping
-- `decode(solution, *, variable_order: Optional[Sequence[str]] = None, threshold: float = 0.5, include_ancilla: bool = False) -> Dict[str, bool]` - Decode to signal truth values
+- `compile() -> QUBOCompiler` - Return underlying QUBO compiler with all gate constraints
+- `signals -> Mapping[str, int]` - Map signal names to QUBO variable indices
+- `decode(solution, *, variable_order: Optional[Sequence[str]] = None, threshold: float = 0.5, include_ancilla: bool = False) -> Dict[str, bool]` - Convert solver output to signal truth values
 
 **Example:**
 ```python
-# Create circuit
-circuit = BinaryCircuitCompiler()
+from lowbit import BinaryCircuitCompiler, solve_with_restarts
 
-# Add signals
+# Create circuit compiler
+circuit = BinaryCircuitCompiler(default_weight=10.0)
+
+# Add input/output signals
 circuit.add_signal("a")
 circuit.add_signal("b")
 circuit.add_signal("c")
-circuit.add_signal("out")
+circuit.add_signal("result")
 
-# Gates: out = (a AND b) OR c
-circuit.gate("AND", "temp1", ["a", "b"])
-circuit.gate("OR", "out", ["temp1", "c"])
+# Define logic: result = (a AND b) OR c
+circuit.gate("AND", "and_out", ["a", "b"])
+circuit.gate("OR", "result", ["and_out", "c"])
 
-# Fix inputs
+# Fix some inputs for testing
 circuit.fix_signal("a", 1)
-circuit.fix_signal("b", 0)
-circuit.fix_signal("c", 1)
+circuit.fix_signal("c", 0)
 
 # Compile and solve
 qubo = circuit.compile()
 ising_result = qubo.compile()
-# ... solve ...
-signals = circuit.decode(solution)  # {"a": True, "b": False, "c": True, "out": True}
+opt_result = solve_with_restarts(ising_result)
+
+# Decode signals (excludes ancilla by default)
+signals = circuit.decode(opt_result.best_solution)
+print(f"Circuit signals: {signals}")
+# Output: {"a": True, "b": False/True, "c": False, "result": True/False}
 ```
 
 ---
 
 ### Solver Interface (`lowbit.solver`)
 
-Probabilistic Ising Machine solver for finding ground states.
+Probabilistic Ising Machine solver using SGD-based dynamics for ground state approximation.
 
 #### Class: `ProbabilisticIsingMachine`
 
 ```python
-from lowbit.solver import ProbabilisticIsingMachine, SGDConfig
+from lowbit import solve_with_restarts
 
-# Configure solver
-config = SGDConfig(
-    learning_rate=0.01,
-    momentum=0.9,
-    temperature=0.1,
-    steps=1000
-)
+# Most common usage - use solve_with_restarts for best results
+result = solve_with_restarts(ising_result, max_restarts=15, verbose=True)
+print(f"Best energy: {result.best_energy}")
+print(f"Best solution: {result.best_solution}")
 
-# Create solver
-solver = ProbabilisticIsingMachine(config)
+# Advanced usage - direct solver access
+from lowbit import ProbabilisticIsingMachine
+from lowbit.solver import SGDConfig
 
-# Solve
-result = solver.solve(J, h, offset)
-print(f"Energy: {result.energy}")
-print(f"Solution: {result.state}")
+config = SGDConfig(learning_rate=0.05, momentum=0.9)
+solver = ProbabilisticIsingMachine(ising_result.J, ising_result.h, config=config)
+solver.run(steps=1000)
+print(f"Energy: {solver.energy()}")
 ```
 
-#### Multi-Restart Optimization
+**Key Methods:**
+- `step(*, callback=None)` - Single SGD iteration
+- `run(steps: int, *, callback=None, record_history=False)` - Run multiple steps
+- `energy(state=None)` - Compute Ising energy
+- `gradient(state=None)` - Gradient of energy w.r.t. probabilities
+- `reset_state(state=None, *, random_state=None)` - Reset probability vector
+
+**Properties:**
+- `size -> int` - Number of probabilistic bits
+- `state -> np.ndarray` - Current probability vector (copy)
+- `config -> SGDConfig` - Configuration parameters
+
+#### Multi-Restart Optimization (`lowbit.optimizer`)
+
+Enhanced optimization with multiple restart strategies to escape local minima.
 
 ```python
-from lowbit.optimizer import solve_with_restarts
+from lowbit import solve_with_restarts, MultiRestartOptimizer
 
-# Solve with multiple restarts to escape local minima
+# Simple multi-restart optimization
+result = solve_with_restarts(
+    ising_result,
+    max_restarts=15,
+    steps_per_restart=2500,
+    objective_function=None,  # Optional custom objective
+    base_config=None,         # Optional SGDConfig
+    random_seed=None,
+    verbose=True
+)
+
+print(f"Best energy: {result.best_energy}")
+print(f"Best solution: {result.best_solution}")
+print(f"Restarts completed: {result.restart_count}")
+print(f"Convergence info: {result.convergence_info}")
+```
+
+**Advanced Multi-Restart Optimizer:**
+```python
+optimizer = MultiRestartOptimizer(ising_result, base_config=config, random_seed=42)
+
+# Custom optimization with early stopping
+result = optimizer.optimize(
+    max_restarts=20,
+    steps_per_restart=3000,
+    early_stop_threshold=-10.0,
+    patience=5,
+    objective_function=my_custom_objective,
+    progress_callback=lambda r, e, s: print(f"Restart {r}: Energy {e}")
+)
+
+# Multi-phase optimization with different strategies
+phases = [
+    (10, 3000, exploration_config),   # Aggressive exploration
+    (5, 2000, refinement_config),     # Refinement
+    (3, 1000, precision_config)       # Fine-tuning
+]
+result = optimizer.multi_phase_optimization(phases)
+```
+
+**Initialization Strategies Available:**
+- Uniform random initialization
+- Biased high/low probability initialization
+- Clustered random initialization
+- Sparse initialization (boundary biased)
+- Guided random (using problem structure)
+
+---
+
+## General Usage Pattern
+
+All builders follow this unified pattern:
+
+```python
+# 1. Create problem builder and import solver
+from lowbit import LinearProgramBuilder, solve_with_restarts
+builder = LinearProgramBuilder()
+
+# 2. Define problem structure
+builder.add_continuous_variable("x", lower=0, upper=10)
+builder.set_objective_coefficients({"x": 1.0})
+builder.add_linear_constraint({"x": 1.0}, rhs=5.0, sense="<=", weight=50.0)
+
+# 3. Compile to QUBO and then Ising
+qubo = builder.compile()
+ising_result = qubo.compile()
+
+# 4. Solve with multi-restart optimization
 result = solve_with_restarts(
     ising_result,
     max_restarts=15,
@@ -468,36 +577,88 @@ result = solve_with_restarts(
     verbose=True
 )
 
+# 5. Decode solution back to original variables
+solution = builder.decode(result.best_solution)
+print(f"Optimal solution: {solution}")
 print(f"Best energy: {result.best_energy}")
-print(f"Best state: {result.best_solution}")
-print(f"Restarts used: {result.restarts_completed}")
 ```
 
----
-
-## General Usage Pattern
-
-All builders follow this pattern:
+## Example: Complete Linear Programming Problem
 
 ```python
-# 1. Create builder
-builder = SomeProblemBuilder()
+from lowbit import LinearProgramBuilder, solve_with_restarts
 
-# 2. Define problem
-builder.add_variable(...)
-builder.set_objective(...)
-builder.add_constraint(...)
+# Create LP problem: maximize 3x + 2y subject to x + 2y <= 8, x,y >= 0
+lp = LinearProgramBuilder()
 
-# 3. Compile to QUBO
-qubo = builder.compile()
-ising_result = qubo.compile()
+# Variables with bounds
+lp.add_continuous_variable("x", lower=0, upper=10, precision_bits=6)
+lp.add_continuous_variable("y", lower=0, upper=10, precision_bits=6)
 
-# 4. Solve
-from lowbit.optimizer import solve_with_restarts
-result = solve_with_restarts(ising_result)
+# Objective: maximize 3x + 2y
+lp.set_maximization(True)
+lp.set_objective_coefficients({"x": 3, "y": 2})
 
-# 5. Decode solution
-solution = builder.decode(result.best_solution)
+# Constraint: x + 2y <= 8
+lp.add_linear_constraint({"x": 1, "y": 2}, rhs=8, sense="<=", weight=50.0)
+
+# Solve
+ising_result = lp.to_ising()
+result = solve_with_restarts(ising_result, max_restarts=20, verbose=True)
+
+# Get solution
+solution = lp.decode(result.best_solution)
+print(f"x = {solution['x']:.3f}, y = {solution['y']:.3f}")
 ```
 
-This unified approach allows easy switching between problem types while maintaining the same solving workflow.
+This unified approach allows easy switching between problem types (linear programming, graph optimization, circuit compilation, etc.) while maintaining the same solving workflow.
+
+## Important Notes on Constraint Weights
+
+**Strong Constraint Weights are Critical**: In QUBO formulations, constraints are enforced via penalty terms. The constraint weights must be significantly larger than the objective coefficients to ensure proper constraint satisfaction.
+
+**Recommended Guidelines**:
+- Use constraint weights **10-100x larger** than objective coefficients
+- For hard constraints (must be satisfied): use weights ≥ 50.0
+- For soft constraints (preferred): use weights 5.0-20.0
+- One-hot constraints in DQM: use weights ≥ 50.0
+- Circuit gate constraints: use weights ≥ 10.0
+
+**Example**: If your objective coefficients are in range [-5, 5], use constraint weights ≥ 50.0 to ensure constraints dominate over objective optimization during the solving process.
+
+## Troubleshooting Common Issues
+
+### Import Errors
+If you get `cannot import name 'solve_with_restarts'`, ensure you're importing from the main module:
+```python
+# Correct import
+from lowbit import solve_with_restarts
+
+# Incorrect - don't import from submodules
+from lowbit.solver import solve_with_restarts  # This will fail
+```
+
+### Solution Decoding Errors
+If you get `Solution must be a mapping or a sequence of values`, this typically means:
+
+1. **Import Issue**: Make sure you import correctly as shown above
+2. **Variable Order**: The decode methods automatically handle variable ordering, no need to specify `variable_order`
+3. **Solution Format**: Ensure you're passing `result.best_solution` (numpy array) to the decode method
+
+**Correct Usage Pattern**:
+```python
+from lowbit import LinearProgramBuilder, solve_with_restarts
+
+# Build problem
+lp = LinearProgramBuilder()
+lp.add_continuous_variable("x", lower=0, upper=10)
+lp.set_objective_coefficients({"x": 1.0})
+
+# Compile and solve
+ising_result = lp.to_ising()
+result = solve_with_restarts(ising_result, max_restarts=10)
+
+# Decode (no additional parameters needed)
+solution = lp.decode(result.best_solution)
+print(solution)  # {"x": 5.234}
+```

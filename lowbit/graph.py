@@ -6,7 +6,7 @@ import math
 from dataclasses import dataclass
 from typing import Dict, List, Mapping, Optional, Sequence, Set, Tuple, Union
 
-from collections.abc import Mapping as MappingABC, Sequence as SequenceABC
+from collections.abc import Mapping as MappingABC
 
 from .compiler import QUBOCompiler, CompilationResult
 
