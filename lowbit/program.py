@@ -199,8 +199,13 @@ class LinearProgramBuilder:
         for var_name in sorted(self._variables.keys()):  # Ensure consistent order
             all_binary_vars.extend(self._binary_vars[var_name])
 
-        # Use provided order or the compiled binary variable order
-        order = list(variable_order) if variable_order is not None else all_binary_vars
+        # Use QUBO variable order if not provided, to handle slack variables
+        if variable_order is None:
+            # Get the complete variable order from the compiled QUBO
+            qubo = self.compile()
+            order = list(qubo.variables)
+        else:
+            order = list(variable_order)
 
         # If solution is array-like, use the order; if mapping, pass None for order
         if isinstance(solution, MappingABC):
